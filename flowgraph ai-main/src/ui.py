@@ -23,8 +23,16 @@ def main():
         if user_input:
             with st.spinner("Thinking..."):
                 response = app(user_input)
+            st.subheader("Generated SQL:")
+            st.code(response["sql"], language="sql")
             st.subheader("Answer:")
-            st.write(response)
+            if isinstance(response["result"], str) and response["result"].startswith("Query failed"):
+                st.error(response["result"])
+            else:
+                st.write(response["result"])
+            if response.get("explanation"):
+                st.subheader("Explanation:")
+                st.write(response["explanation"])
         else:
             st.warning("Please enter a question.")
 

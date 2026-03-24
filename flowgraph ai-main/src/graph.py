@@ -64,6 +64,13 @@ User Query:
     return sql
 
 
+def safe_run_query(sql):
+    try:
+        return run_query(sql)
+    except Exception as e:
+        return f"Query failed: {str(e)}"
+
+
 def format_result(result):
     if not result:
         return "No data found."
@@ -91,6 +98,17 @@ Instructions:
     return response.choices[0].message.content.strip()
 
 
+def explain_result(query, result):
+    prompt = f"""User Query: {query}
+SQL Result: {result}
+Explain this result in simple business terms. Keep it short and clear."""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
+
+
 def extract_order_id(query):
     import re
     match = re.search(r'\d{5,}', query)
@@ -106,15 +124,17 @@ def is_valid_query(query):
 # ✅ MAIN FUNCTION (UI CALLS THIS)
 def app(query):
     if not is_valid_query(query):
-        return "This system is designed to answer questions related to sales, deliveries, billing, and payments only."
+        return {"sql": "", "result": "This system is designed to answer questions related to sales, deliveries, billing, and payments only."}
 
     sql = generate_sql(query)
 
-    try:
-        result = run_query(sql)
-        return generate_answer(query, result)
-    except Exception as e:
-        return f"Error executing SQL: {e}"
+    result = safe_run_query(sql)
+    if isinstance(result, str) and result.startswith("Query failed"):
+        return {"sql": sql, "result": result, "explanation": ""}
+
+    answer = generate_answer(query, result)
+    explanation = explain_result(query, result)
+    return {"sql": sql, "result": answer, "explanation": explanation}
 
 
 print("Response formatting improved")
