@@ -91,6 +91,12 @@ Instructions:
     return response.choices[0].message.content.strip()
 
 
+def extract_order_id(query):
+    import re
+    match = re.search(r'\d{5,}', query)
+    return match.group(0) if match else None
+
+
 # ✅ Guardrails
 def is_valid_query(query):
     keywords = ["order", "delivery", "billing", "payment", "product", "customer"]
