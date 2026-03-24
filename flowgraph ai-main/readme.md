@@ -47,6 +47,64 @@ User Query
    → Displayed in UI
 ```
 
+### Architecture Decisions
+
+**Why Streamlit?**
+Streamlit lets you build a functional data app in pure Python with no frontend code. For a project focused on data querying and visualization, it removes all UI boilerplate and keeps the codebase minimal and readable.
+
+**Why SQLite?**
+The dataset is a static, read-only SAP O2C export loaded once at startup. SQLite is zero-config, file-based, and ships with Python — no server, no credentials, no connection pooling needed. For a dataset of this size (~thousands of rows across 19 tables), it performs well and keeps the stack simple. A production system would swap this for PostgreSQL or a data warehouse, but SQLite is the right choice here for portability and ease of setup.
+
+**Why Groq?**
+Groq's LPU inference delivers very low latency on large models. Using `llama-3.3-70b-versatile` gives strong SQL generation quality at speeds that feel responsive in a Streamlit UI. The API is OpenAI-compatible, making it easy to swap models or providers if needed.
+
+**Why NetworkX + PyVis?**
+NetworkX handles graph construction and relationship traversal in Python. PyVis converts it to an interactive HTML/JavaScript visualization using vis.js under the hood. This combination avoids a separate frontend framework while still producing a fully interactive, physics-enabled graph embedded directly in Streamlit via `components.html()`.
+
+---
+
+## Database Design
+
+The raw dataset is a collection of JSONL files organized into folders by entity type under `data/sap-o2c-data/`. The loader (`src/load_data.py`) scans each folder, concatenates all `part-*.jsonl` files, serializes any nested JSON columns to strings, and writes each entity as a table in `data.db`.
+
+Key tables and their roles:
+
+| Table | Description |
+|-------|-------------|
+| `sales_order_headers` | Root of the O2C flow — one row per sales order |
+| `sales_order_items` | Line items per order |
+| `outbound_delivery_items` | Links orders to physical deliveries |
+| `billing_document_headers` | Invoice records linked to deliveries |
+| `payments_accounts_receivable` | Payment records linked to billing documents |
+| `business_partners` | Customer master data |
+| `products` | Product catalog |
+
+Foreign key chain used for graph traversal:
+```
+salesOrder → referenceSdDocument → deliveryDocument → billingDocument → accountingDocument
+```
+
+---
+
+## LLM Prompting Strategy
+
+SQL generation uses a single-shot prompt with four components:
+
+1. **Role definition** — tells the model it is a SQL generator for a specific business analytics system, not a general assistant
+2. **Schema context** — lists all tables with their relevant columns so the model never has to guess column names
+3. **Relationship map** — explicitly states the JOIN paths between tables, preventing the model from inventing incorrect joins
+4. **SQL rules** — instructs the model to use `GROUP BY` for aggregation, `SUM()` for revenue, `ORDER BY DESC` for ranking, `LIMIT 10` for top-N queries, and to return only the SQL with no explanation or markdown
+
+A concrete example query/SQL pair is included in the prompt to anchor the model's output format for analytics queries.
+
+After the LLM responds, the SQL is cleaned with:
+```python
+sql.replace("```sql", "").replace("```", "").strip()
+```
+This strips any markdown fences the model may include despite being told not to.
+
+A second LLM call then takes the original query + raw SQL result and produces a structured, bullet-pointed business answer. A third call generates a short plain-English explanation of what the result means in business terms.
+
 ---
 
 ## Graph Model
@@ -148,6 +206,14 @@ Queries are validated before reaching the LLM. Only questions related to:
 ...are processed. Everything else returns:
 
 > "This system is designed to answer questions related to sales, deliveries, billing, and payments only."
+
+This check runs entirely in Python before any API call is made, so off-topic queries cost nothing and return instantly.
+
+Three additional layers of error handling sit below the guardrail:
+
+- **SQL execution errors** — caught by `safe_run_query()`, returned as a clean `"Query failed: ..."` message without exposing a traceback
+- **Empty results** — detected before the answer LLM call; returns `"No data found for this query."` immediately
+- **Markdown in SQL** — stripped unconditionally after every LLM response to prevent syntax errors from backtick-wrapped output
 
 ---
 
