@@ -1,16 +1,24 @@
 import sqlite3
 from groq import Groq
 import os
-from dotenv import load_dotenv
+import re
 
-# Load API key
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# ✅ Load API key from Streamlit Secrets
+api_key = os.getenv("GROQ_API_KEY")
+
+if not api_key:
+    raise ValueError("GROQ_API_KEY not found. Please set it in Streamlit Secrets.")
+
+client = Groq(api_key=api_key)
+
+# ✅ Correct DB path (works locally + Streamlit Cloud)
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+DB_PATH = os.path.join(BASE_DIR, "data.db")
 
 
 # ✅ Run SQL on DB
 def run_query(sql):
-    conn = sqlite3.connect("data.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(sql)
     result = cursor.fetchall()
@@ -18,7 +26,7 @@ def run_query(sql):
     return result
 
 
-# ✅ LLM → SQL (PUT YOUR PROMPT HERE)
+# ✅ LLM → SQL
 def generate_sql(query):
     prompt = f"""
 You are an expert SQL generator for a business analytics system.
@@ -52,15 +60,6 @@ SQL Rules:
 - Use LIMIT 10 for top-N results unless user specifies otherwise
 - Use COUNT() for frequency or volume queries
 
-Example:
-Query: Which customers generate the highest revenue?
-SQL:
-SELECT soldToParty, SUM(totalNetAmount) AS total_revenue
-FROM sales_order_headers
-GROUP BY soldToParty
-ORDER BY total_revenue DESC
-LIMIT 10;
-
 User Query:
 {query}
 """
@@ -72,25 +71,31 @@ User Query:
 
     sql = response.choices[0].message.content.strip()
     sql = sql.replace("```sql", "").replace("```", "").strip()
+
     print("Generated SQL:", sql)
     return sql
 
 
+# ✅ Safe SQL execution
 def safe_run_query(sql):
     try:
         return run_query(sql)
     except Exception as e:
+        print("SQL ERROR:", e)
         return f"Query failed: {str(e)}"
 
 
+# ✅ Format raw SQL result
 def format_result(result):
     if not result:
         return "No data found."
     return "\n".join(str(row) for row in result)
 
 
+# ✅ Convert SQL result → nice answer
 def generate_answer(query, result):
     formatted = format_result(result)
+
     prompt = f"""User asked:
 {query}
 
@@ -102,28 +107,34 @@ Instructions:
 - Use bullet points or numbered list
 - Highlight key values (order id, amount, customer)
 - Keep it concise
-- Do not include unnecessary text"""
+- Do not include unnecessary text
+"""
+
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
     )
+
     return response.choices[0].message.content.strip()
 
 
+# ✅ Explain result in business terms
 def explain_result(query, result):
     prompt = f"""User Query: {query}
 SQL Result: {result}
 Explain this result in simple business terms. Keep it short and clear."""
+
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
     )
+
     return response.choices[0].message.content.strip()
 
 
+# ✅ Extract order ID (for graph highlight)
 def extract_order_id(query):
-    import re
-    match = re.search(r'\d{5,}', query)
+    match = re.search(r'\d{{5,}}', query)
     return match.group(0) if match else None
 
 
@@ -133,23 +144,34 @@ def is_valid_query(query):
     return any(k in query.lower() for k in keywords)
 
 
-# ✅ MAIN FUNCTION (UI CALLS THIS)
+# ✅ MAIN FUNCTION (called by UI)
 def app(query):
     if not is_valid_query(query):
-        return {"sql": "", "result": "This system is designed to answer questions related to sales, deliveries, billing, and payments only."}
+        return {
+            "sql": "",
+            "result": "This system is designed to answer questions related to sales, deliveries, billing, and payments only.",
+            "explanation": ""
+        }
 
     sql = generate_sql(query)
 
     result = safe_run_query(sql)
+
     if isinstance(result, str) and result.startswith("Query failed"):
         return {"sql": sql, "result": result, "explanation": ""}
 
     if not result:
-        return {"sql": sql, "result": "No data found for this query.", "explanation": "No matching records exist in the dataset."}
+        return {
+            "sql": sql,
+            "result": "No data found for this query.",
+            "explanation": "No matching records exist in the dataset."
+        }
 
     answer = generate_answer(query, result)
     explanation = explain_result(query, result)
-    return {"sql": sql, "result": answer, "explanation": explanation}
 
-
-print("Response formatting improved")
+    return {
+        "sql": sql,
+        "result": answer,
+        "explanation": explanation
+    }
