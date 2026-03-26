@@ -134,7 +134,7 @@ Explain this result in simple business terms. Keep it short and clear."""
 
 # ✅ Extract order ID (for graph highlight)
 def extract_order_id(query):
-    match = re.search(r'\d{{5,}}', query)
+    match = re.search(r'\d{5,}', query)
     return match.group(0) if match else None
 
 
