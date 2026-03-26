@@ -71,7 +71,7 @@ def setup_database():
         print(f"  {table_name} shape: {df.shape}")
         print(f"  {table_name} columns: {df.columns.tolist()}")
 
-        # Serialize any columns containing dicts/lists to JSON strings
+       
         for col in df.columns:
             if df[col].apply(lambda x: isinstance(x, (dict, list))).any():
                 df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
