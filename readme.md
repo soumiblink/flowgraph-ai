@@ -1,10 +1,3 @@
-This is already **very strong**, but I’ll upgrade it to a **top 1% submission README** — sharper positioning, clearer engineering thinking, and more “interviewer signal” (they care a LOT about reasoning + tradeoffs).
-
----
-
-# 🚀 UPGRADED VERSION (TOP 1% READY)
-
----
 
 # FlowGraph AI
 
