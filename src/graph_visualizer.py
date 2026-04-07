@@ -141,33 +141,129 @@ def visualize_graph(target_order=None, highlight_nodes=None):
 
     highlight_set = set(highlight_nodes) if highlight_nodes else set()
 
-    net = Network(height="560px", width="100%", directed=True, bgcolor="#1a1a2e", font_color="white")
-    net.toggle_physics(True)
+    net = Network(
+        height="580px",
+        width="100%",
+        directed=True,
+        bgcolor="#1a1a2e",
+        font_color="white",
+    )
+
     net.set_options("""{
-      "edges": {
-        "smooth": { "type": "curvedCW", "roundness": 0.2 },
-        "arrows": { "to": { "enabled": true } },
-        "color": { "color": "#aaaaaa" }
+      "layout": {
+        "hierarchical": {
+          "enabled": true,
+          "direction": "LR",
+          "sortMethod": "directed",
+          "levelSeparation": 220,
+          "nodeSpacing": 120
+        }
       },
-      "physics": { "stabilization": { "iterations": 150 } }
+      "physics": { "enabled": false },
+      "edges": {
+        "arrows": { "to": { "enabled": true, "scaleFactor": 0.8 } },
+        "color": { "color": "#aaaaaa" },
+        "font": { "size": 11, "color": "#dddddd", "align": "middle" },
+        "smooth": { "enabled": false }
+      },
+      "nodes": {
+        "font": { "size": 13 },
+        "borderWidth": 2
+      }
     }""")
 
+    EDGE_LABELS = {
+        "customer": "places",
+        "order":    "fulfilled by",
+        "delivery": "billed as",
+        "billing":  "paid via",
+    }
+
     for node, attrs in G.nodes(data=True):
-        
+        ntype = attrs.get("ntype", "order")
+        raw_id = node.split(" ", 1)[-1]
+        label = f"{ntype.capitalize()}: {raw_id}"
+        title = f"{ntype.capitalize()} ID: {raw_id}"
+
         if any(h in node for h in highlight_set):
             color = "#FF4136"
-            size = 20
+            size = 24
         else:
-            color = attrs.get("color", "#4A90D9")
-            size = 12
-        net.add_node(
-            node,
-            label=attrs.get("label", node),
-            title=attrs.get("title", node),
-            color=color,
-            size=size,
-        )
+            color = attrs.get("color", NODE_COLORS.get(ntype, "#4A90D9"))
+            size = 18
+
+        net.add_node(node, label=label, title=title, color=color, size=size)
+
     for src, dst in G.edges():
-        net.add_edge(src, dst)
+        src_type = G.nodes[src].get("ntype", "order")
+        edge_label = EDGE_LABELS.get(src_type, "")
+        net.add_edge(src, dst, label=edge_label, title=edge_label)
 
     net.write_html(OUTPUT_PATH)
+
+
+
+# ---------------------------------------------------------------------------
+# Story mode: step-by-step flow for a given order
+# ---------------------------------------------------------------------------
+
+def get_order_flow_steps(order_id):
+    """Return the O2C chain for an order as ordered step dicts."""
+    steps = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # Customer + Order
+        cur.execute("""
+            SELECT soldToParty, salesOrder, totalNetAmount
+            FROM sales_order_headers WHERE salesOrder = ? LIMIT 1
+        """, (order_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return []
+        customer, order, amount = row
+        steps.append({"step": "Customer",    "label": f"Customer ID: {customer}"})
+        steps.append({"step": "Sales Order", "label": f"Order: {order}  |  Amount: {amount}"})
+
+        # Delivery
+        cur.execute("""
+            SELECT deliveryDocument FROM outbound_delivery_items
+            WHERE referenceSdDocument = ? LIMIT 1
+        """, (order_id,))
+        row = cur.fetchone()
+        delivery = row[0] if row else None
+        steps.append({"step": "Delivery", "label": f"Delivery: {delivery}" if delivery else "Delivery: NOT FOUND"})
+
+        # Billing
+        billing = None
+        if delivery:
+            cur.execute("""
+                SELECT billingDocument FROM billing_document_items
+                WHERE referenceSdDocument = ? LIMIT 1
+            """, (delivery,))
+            row = cur.fetchone()
+            billing = row[0] if row else None
+        steps.append({"step": "Billing", "label": f"Billing Doc: {billing}" if billing else "Billing: NOT FOUND"})
+
+        # Payment
+        payment = None
+        if billing:
+            cur.execute("""
+                SELECT par.accountingDocument, par.amountInTransactionCurrency
+                FROM billing_document_headers bdh
+                JOIN payments_accounts_receivable par
+                    ON par.accountingDocument = bdh.accountingDocument
+                WHERE bdh.billingDocument = ? LIMIT 1
+            """, (billing,))
+            row = cur.fetchone()
+            if row:
+                payment = f"Doc: {row[0]}  |  Paid: {row[1]}"
+        steps.append({"step": "Payment", "label": payment if payment else "Payment: NOT FOUND"})
+
+        conn.close()
+    except Exception as e:
+        print(f"Story mode DB error: {e}")
+
+    return steps

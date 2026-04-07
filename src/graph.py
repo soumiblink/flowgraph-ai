@@ -283,4 +283,39 @@ def app(query):
 
     answer = generate_answer(query, result)
     explanation = explain_result(query, result)
-    return {"sql": sql, "result": answer, "explanation": explanation}
+    return {"sql": sql, "result": answer, "explanation": explanation, "raw_result": result}
+
+
+# ---------------------------------------------------------------------------
+# Key insights helper
+# ---------------------------------------------------------------------------
+
+def get_key_insights(result):
+    if not result or not isinstance(result, list):
+        return {}
+
+    insights = {"total_records": len(result)}
+
+    # Sum any numeric values found across all rows
+    total = 0.0
+    found_numeric = False
+    customer_counts = {}
+
+    for row in result:
+        if not isinstance(row, (list, tuple)):
+            continue
+        for val in row:
+            if isinstance(val, (int, float)):
+                total += val
+                found_numeric = True
+            if isinstance(val, str) and len(val) > 0:
+                # Treat first string column as potential customer/entity ID
+                customer_counts[val] = customer_counts.get(val, 0) + 1
+
+    if found_numeric:
+        insights["total_amount"] = round(total, 2)
+
+    if customer_counts:
+        insights["top_customer"] = max(customer_counts, key=customer_counts.get)
+
+    return insights
